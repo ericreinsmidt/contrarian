@@ -535,6 +535,7 @@ static void resident_quit(void)
  * process cannot have its environment changed from outside -- so it is set
  * with setenv() here and every existing getenv() call site keeps working,
  * including the viewport lookup over in common/generic_video.c. */
+#define CTR_PID "/tmp/contrarian_res.pid"
 #define CTR_REQ "/tmp/contrarian_req"
 #define CTR_REP "/tmp/contrarian_rep"
 
@@ -585,14 +586,33 @@ static int resident_loop(void)
 	char line[MAX_PATH * 3], rom[MAX_PATH];
 	int fd_req, fd_rep;
 
+	signal(SIGUSR1, ctr_end_game);
+
+	{	/* Only one of these may run: two of them race to create the fifos and
+		 * unlink each other's pidfile, which leaves the launcher unable to
+		 * reach the game that is actually playing. launch.sh guards with
+		 * pgrep, but that races against a dying process, so refuse here too. */
+		FILE *pf = fopen(CTR_PID, "r");
+		if (pf) {
+			long other = 0;
+			if (fscanf(pf, "%ld", &other) != 1) other = 0;
+			fclose(pf);
+			if (other > 0 && other != (long)getpid() &&
+			    kill((pid_t)other, 0) == 0) {
+				LOG_info("resident: %ld already running, exiting\n", other);
+				return EXIT_SUCCESS;
+			}
+		}
+		pf = fopen(CTR_PID, "w");
+		if (pf) { fprintf(pf, "%ld\n", (long)getpid()); fclose(pf); }
+	}
+
 	fd_req = ctr_fifo_open(CTR_REQ);
 	fd_rep = ctr_fifo_open(CTR_REP);
 	if (fd_req < 0 || fd_rep < 0) {
 		LOG_error("resident: cannot create fifos\n");
 		return EXIT_FAILURE;
 	}
-
-	signal(SIGUSR1, ctr_end_game);
 
 	resident_init();
 	LOG_info("resident: ready in %ims, waiting for a game\n", SDL_GetTicks());
@@ -624,7 +644,14 @@ static int resident_loop(void)
 
 	resident_quit();
 	close(fd_req); close(fd_rep);
-	unlink(CTR_REQ); unlink(CTR_REP);
+	{	/* Leave another process's files alone. */
+		FILE *pf = fopen(CTR_PID, "r");
+		long owner = 0;
+		if (pf) { if (fscanf(pf, "%ld", &owner) != 1) owner = 0; fclose(pf); }
+		if (owner == (long)getpid()) {
+			unlink(CTR_REQ); unlink(CTR_REP); unlink(CTR_PID);
+		}
+	}
 	return EXIT_SUCCESS;
 }
 

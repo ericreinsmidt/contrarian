@@ -2996,6 +2996,9 @@ void SND_init(double sample_rate, double frame_rate)
 	spec_in.callback = SND_audioCallback;
 
 #if defined(USE_SDL2)
+	/* ~137ms of the launch, and the single largest piece of it: opening the
+	 * ALSA device. It is released between games so the launcher keeps its own
+	 * sounds, so this is paid per launch. */
 	snd.device_id = SDL_OpenAudioDevice(NULL, 0, &spec_in, &spec_out, SDL_AUDIO_ALLOW_ANY_CHANGE);
 	if (snd.device_id <= 0)
 	{

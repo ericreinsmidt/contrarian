@@ -130,6 +130,26 @@ bool plat_input_init(void)
 	return true;
 }
 
+/* Throw away everything that queued up while a game owned the screen. The
+ * joystick stayed open through the game, so SDL has been collecting presses
+ * meant for it, and the raw fds have too. */
+void plat_input_flush(void)
+{
+	SDL_Event e;
+	SDL_PumpEvents();
+	while (SDL_PollEvent(&e)) { }
+#ifdef __linux__
+	{
+		struct input_event ev;
+		int fds[3], i;
+		fds[0] = fd_power; fds[1] = fd_keys; fds[2] = fd_joy;
+		for (i = 0; i < 3; i++)
+			while (fds[i] >= 0 &&
+			       read(fds[i], &ev, sizeof ev) == (ssize_t)sizeof ev) { }
+	}
+#endif
+}
+
 void plat_input_quit(void)
 {
 	if (joy) { SDL_JoystickClose(joy); joy = NULL; }
@@ -316,6 +336,115 @@ int plat_run(char *const argv[], const char *const envkv[], const char *workdir)
 	if (waitpid(pid, &status, 0) < 0) return -1;
 #endif
 	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+/* ---- resident minarch ---------------------------------------------------
+ * A resident minarch holds the GL context and the loaded core between games,
+ * which takes a launch from ~1100ms to ~200ms. The launcher talks to it over
+ * two fifos rather than forking it per game.
+ *
+ * Both are opened O_RDWR and held: a fifo opened for reading alone blocks
+ * until a writer appears and returns EOF when the last one leaves, which
+ * turns a request/reply into a race that deadlocks whichever side opens
+ * first. Holding a write descriptor of our own removes both behaviours. */
+#define CTR_PID "/tmp/contrarian_res.pid"
+#define CTR_REQ "/tmp/contrarian_req"
+#define CTR_REP "/tmp/contrarian_rep"
+
+/* The resident process writes its pid here at startup; it is how the power
+ * button reaches the running game. */
+static pid_t resident_pid(void)
+{
+	FILE *f = fopen(CTR_PID, "r");
+	long v = 0;
+	if (!f) return -1;
+	if (fscanf(f, "%ld", &v) != 1) v = 0;
+	fclose(f);
+	return v > 0 ? (pid_t)v : -1;
+}
+
+bool plat_resident_ready(void)
+{
+	struct stat st;
+	return stat(CTR_REQ, &st) == 0 && S_ISFIFO(st.st_mode) &&
+	       stat(CTR_REP, &st) == 0 && S_ISFIFO(st.st_mode);
+}
+
+/* Hand a game to the resident minarch and block until it says the game is
+ * over, watching the power button throughout -- the same job plat_run does
+ * for the one-shot binary, except the signal ends the GAME rather than the
+ * process, so residency survives to serve the next launch.
+ *
+ * Returns true if it ran, false if the resident process did not answer (the
+ * caller then falls back to running minarch the old way). */
+static int res_fd_rep = -1;
+
+/* Ask for a game. Returns immediately -- the caller can draw its launch
+ * animation while the game loads, which is most of what the launch costs. */
+bool plat_resident_send(const char *req_line)
+{
+	int fd_req;
+	char c;
+
+	run_power_pressed = false;
+	if (res_fd_rep >= 0) { close(res_fd_rep); res_fd_rep = -1; }
+
+	fd_req = open(CTR_REQ, O_WRONLY | O_NONBLOCK);
+	if (fd_req < 0) return false;              /* nobody listening */
+	res_fd_rep = open(CTR_REP, O_RDWR | O_NONBLOCK);
+	if (res_fd_rep < 0) { close(fd_req); return false; }
+
+	/* Drop anything left over from a previous game before asking for one. */
+	while (read(res_fd_rep, &c, 1) == 1) { }
+
+	if (write(fd_req, req_line, strlen(req_line)) < 0) {
+		close(fd_req); close(res_fd_rep); res_fd_rep = -1;
+		return false;
+	}
+	close(fd_req);
+	return true;
+}
+
+/* Block until the game is over, watching the power button throughout -- the
+ * same job plat_run does for the one-shot binary, except the signal ends the
+ * GAME rather than the process, so residency survives the next launch. */
+bool plat_resident_wait(void)
+{
+	int fd_rep = res_fd_rep;
+	bool ok = false;
+	char c;
+
+	if (fd_rep < 0) return false;
+
+#ifdef __linux__
+	{
+		struct input_event ev;
+		int sent_stop = 0;
+		pid_t res = resident_pid();
+
+		while (fd_power >= 0 && read(fd_power, &ev, sizeof ev) == (ssize_t)sizeof ev)
+			; /* drain stale presses */
+
+		for (;;) {
+			if (read(fd_rep, &c, 1) == 1) { ok = true; break; }
+			usleep(20 * 1000);
+			while (fd_power >= 0 &&
+			       read(fd_power, &ev, sizeof ev) == (ssize_t)sizeof ev) {
+				if (ev.type == EV_KEY && ev.code == KEY_POWER &&
+				    ev.value == 1 && !sent_stop) {
+					run_power_pressed = true;
+					sent_stop = 1;
+					/* End the game, not the process. */
+					if (res > 0) kill(res, SIGUSR1);
+				}
+			}
+			if (res > 0 && kill(res, 0) != 0) break;   /* it died */
+		}
+	}
+#endif
+	close(fd_rep);
+	res_fd_rep = -1;
+	return ok;
 }
 
 void plat_request_poweroff(void)

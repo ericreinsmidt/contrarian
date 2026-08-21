@@ -183,9 +183,29 @@ LOG=$CTR_DIR/contrarian.log
 [ -f "$LOG" ] && mv -f "$LOG" "$CTR_DIR/contrarian.log.1"
 : > "$LOG"
 
+# Resident minarch: it holds the GL context and the loaded core between games,
+# which takes a launch from ~1100ms to ~200ms. Started here so its ~1s of setup
+# runs during the boot animation, alongside the launcher's own -- and so any
+# clearing it does while creating its context is hidden under the animation
+# rather than flashing over the launcher.
+#
+# Nothing depends on it: the launcher checks for its fifos and runs a game the
+# old way, one process per game, if they are not there. That is what happens
+# for a launch in the first second after boot, and if this ever dies.
+export CONTRARIAN_TAG=Contra
+export CONTRARIAN_PANEL=$CTR_DIR/res/nes
+
+start_resident() {
+	pgrep -f "minarch.elf --resident" > /dev/null && return
+	"$CTR_DIR/minarch.elf" --resident "$CTR_DIR/cores/fceumm_libretro.so" \
+		>> "$LOG" 2>&1 &
+}
+start_resident
+
 # Restart loop: only ever exits for poweroff.
 while true; do
 	leds_off
+	start_resident          # bring it back if it died
 	"$CTR_DIR/contrarian.elf" >> "$LOG" 2>&1
 	if [ -f /tmp/contrarian_poweroff ]; then
 		rm -f /tmp/contrarian_poweroff

@@ -60,6 +60,16 @@ int plat_run(char *const argv[], const char *const envkv[], const char *workdir)
 /* True when the last plat_run() was cut short by the power button. */
 bool plat_run_power_pressed(void);
 
+/* Resident minarch: holds the GL context and the core between games, so a
+ * launch costs ~200ms instead of ~1100ms. plat_resident_run returns false if
+ * it is not answering, and the caller falls back to running minarch per game. */
+bool plat_resident_ready(void);
+bool plat_resident_send(const char *req_line);
+bool plat_resident_wait(void);
+
+/* Drop input that queued while a game owned the screen. */
+void plat_input_flush(void);
+
 void plat_request_poweroff(void);
 
 /* Turn every LED off and stop the animation engine (saves power). */

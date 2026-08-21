@@ -277,6 +277,8 @@ static void power_off(app *a);
 
 static void launch(app *a)
 {
+	int gw = TUBE_W, gh = TUBE_H, gx = TUBE_X, gy = TUBE_Y;
+	bool resident = false;
 	ctr_item *it;
 	char core[SCAN_PATH], elf[SCAN_PATH], rom[SCAN_PATH], face_env[SCAN_PATHC];
 	char viewport_env[96];
@@ -317,7 +319,6 @@ static void launch(app *a)
 	/* Put the picture in the tube. The cabinet is drawn over it by minarch's
 	 * own overlay pass, so the game plays ON the television. */
 	{
-		int gw = TUBE_W, gh = TUBE_H, gx = TUBE_X, gy = TUBE_Y;
 		if (a->game_2x) {
 			gw = GAME_2X_W; gh = GAME_2X_H;
 			gx = TUBE_X + (TUBE_W - gw) / 2;
@@ -344,15 +345,55 @@ static void launch(app *a)
 	/* Starting a game is the set coming ON: a bright line snaps out and opens,
 	 * and the game is behind it. Quitting is the set going off. Reading it from
 	 * the player's side rather than the launcher's is the intuitive way round. */
-	tv_on(a);
-	blip_quit();          /* minarch opens ALSA itself; do not hold the device */
-	if (view_get(a->view)->unload) view_get(a->view)->unload(a);
-	font_quit();
-	plat_input_quit();
-	plat_video_quit();
+	/* The audio device is exclusive, and minarch wants it either way. Released
+	 * before the request so the game's own audio init does not wait on it. */
+	blip_quit();
 
-	rc = plat_run(argv, env, P_ROOT);
-	fprintf(stderr, "minarch exited %d\n", rc);
+	if (plat_resident_ready()) {
+		/* Resident minarch: it already holds the GL context and the core, so
+		 * the game is up in ~200ms instead of ~1100ms. Nothing here is torn
+		 * down -- keeping this process's own context costs another ~440ms
+		 * each way, and there is no need to give it up: only one of the two
+		 * draws at a time, and this one is blocked until the game ends. */
+		char req[SCAN_PATHC * 2 + 64];
+		char face[SCAN_PATHC];
+
+		face[0] = 0;
+		if (it->res.sha1[0])
+			snprintf(face, sizeof face, "%s/%s.png", a->faces_dir, it->res.sha1);
+
+		snprintf(req, sizeof req, "%s\t%s\t%d,%d,%d,%d\n",
+		         rom, face, gx, gy, gw, gh);
+
+		if (plat_resident_send(req)) {
+			/* The set comes on WHILE the game loads, rather than before it.
+			 * The animation is ~220ms and the load ~430ms, so this is that
+			 * much taken off what the player waits through -- the same
+			 * reason the boot animation runs alongside startup. */
+			tv_on(a);
+			plat_resident_wait();
+			resident = true;
+			fprintf(stderr, "resident game finished\n");
+		} else {
+			fprintf(stderr, "resident minarch did not answer, falling back\n");
+		}
+	}
+
+	/* Fallback path still animates first: it is about to tear the display
+	 * down, so there is nothing to overlap with. */
+	if (!resident) tv_on(a);
+
+	if (!resident) {
+		/* One game per process, the old way. Kept as the fallback for a
+		 * resident minarch that is missing or has died. */
+		if (view_get(a->view)->unload) view_get(a->view)->unload(a);
+		font_quit();
+		plat_input_quit();
+		plat_video_quit();
+
+		rc = plat_run(argv, env, P_ROOT);
+		fprintf(stderr, "minarch exited %d\n", rc);
+	}
 
 	/* A CRT toggle made in the in-game menu is written into minarch's config;
 	 * fold it back into contra.db so it survives the next launch. */
@@ -373,12 +414,15 @@ static void launch(app *a)
 	if (a->db.dirty) { db_save(a->db_path, &a->db); a->db.dirty = false; }
 
 	if (access(CTR_POWEROFF_FLAG, F_OK) == 0) { a->running = false; return; }
-	if (!plat_video_init() || !plat_input_init()) { a->running = false; return; }
-	a->r = plat_renderer();
+	if (!resident) {
+		if (!plat_video_init() || !plat_input_init()) { a->running = false; return; }
+		a->r = plat_renderer();
+		font_init(a->r);
+		if (view_get(a->view)->load) view_get(a->view)->load(a);
+	}
 	plat_leds_off();
-	font_init(a->r);
-	blip_init_res(a->res_dir);
-	if (view_get(a->view)->load) view_get(a->view)->load(a);
+	blip_init_res(a->res_dir);   /* take the audio device back */
+	plat_input_flush();
 	memset(&a->in, 0, sizeof a->in);
 
 	/* Power was pressed during the game. minarch no longer handles that key
