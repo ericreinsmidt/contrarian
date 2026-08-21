@@ -1,20 +1,21 @@
 """Contrarian boot animation.
 
-The Konami Code entered on a black screen, then the title, then the set snaps
-on. Entirely original artwork: an input sequence is not anyone's copyrighted
+The Konami Code entered on a black screen, then the logo, then the set snaps
+on. The code is original artwork: an input sequence is not anyone's copyrighted
 work, which is exactly why it is the right motif here -- it is instantly
 readable to anyone who would install this and owes nothing to Konami's art.
+The logo that resolves out of the flash is docs/logo.png.
 
 Writes numbered frames, then encodes res/boot/contrarian-boot.mp4.
 """
 import os, subprocess, math, sys
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageChops
 sys.path.insert(0, os.path.dirname(__file__))
 import pixfont
 
 W, H, FPS = 1024, 768, 30
 OUT = "/tmp/ctr_boot_frames"
-AMBER, WHITE, RED = (214,150,64), (240,238,230), (208,58,44)
+AMBER, WHITE = (214,150,64), (240,238,230)
 
 SEQ = [("UP",None),("UP",None),("DOWN",None),("DOWN",None),
        ("LEFT",None),("RIGHT",None),("LEFT",None),("RIGHT",None),
@@ -27,6 +28,25 @@ T_FLASH= T_START + 0.34
 T_TITLE= T_FLASH + 1.15
 T_ON   = T_TITLE + 0.55
 TOTAL  = T_ON + 0.30
+
+LOGO_SRC  = "docs/logo.png"
+LOGO_W    = 860              # of 1024: wide, but with air either side
+_logo_cache = {}
+
+def logo(scale):
+    """The wordmark at a given scale, RGB on black, cached per size.
+
+    Kept on its black field on purpose: the frame it lands on is either black
+    or the tail of the white flash, and it is composited with `lighter`, so
+    the black simply has no effect and the letters emerge as the flash falls
+    away. Compositing it any other way would punch a black box in the flash."""
+    key = round(scale, 3)
+    if key not in _logo_cache:
+        src = Image.open(LOGO_SRC).convert("RGB")
+        w = max(1, int(LOGO_W * scale))
+        h = max(1, round(w * src.height / src.width))
+        _logo_cache[key] = src.resize((w, h), Image.LANCZOS)
+    return _logo_cache[key]
 
 def frame(t):
     im = Image.new("RGB", (W, H), (0,0,0))
@@ -70,25 +90,19 @@ def frame(t):
         v = int(255*k*k)
         im = Image.new("RGB",(W,H),(v,v,v)); d = ImageDraw.Draw(im)
 
-    # --- title ----------------------------------------------------------
+    # --- logo -----------------------------------------------------------
+    # The code resolves into the wordmark: it settles down out of a slightly
+    # oversized frame while it brightens, so it arrives rather than appears.
     if T_FLASH <= t < T_ON:
         k = min(1.0, (t - T_FLASH)/0.45)
-        title = "CONTRARIAN"
-        px = 11
-        tw = pixfont.width(title, px)
-        x  = (W - tw)//2
-        y  = H//2 - 60
-        # letters drop in from the left, like the code resolving into a name
-        for i,ch in enumerate(title):
-            ki = max(0.0, min(1.0, (k*len(title) - i)))
-            if ki <= 0: continue
-            off = int((1-ki)*70)
-            col = tuple(int(c*ki) for c in WHITE)
-            pixfont.draw(d, ch, x + i*(5+1)*px - off, y, px, col)
-        if k >= 1.0:
-            sub = "CONTRA ONLY"
-            pixfont.draw(d, sub, (W - pixfont.width(sub,4))//2, y + 9*px, 4, AMBER)
-            d.rectangle([x, y - 26, x + tw, y - 22], fill=RED)
+        e = 1.0 - (1.0 - k)**3                 # ease out
+        lg = logo(1.055 - 0.055*e)
+        if k < 1.0:                            # brighten into place
+            lg = lg.point(lambda v, _k=e: int(v*_k))
+        lay = Image.new("RGB", (W, H), (0,0,0))
+        lay.paste(lg, ((W - lg.width)//2, (H - lg.height)//2))
+        im = ImageChops.lighter(im, lay)
+        d  = ImageDraw.Draw(im)
 
     # --- the set snapping on --------------------------------------------
     if t >= T_ON:

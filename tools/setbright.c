@@ -1,5 +1,5 @@
 /* Set the LCD backlight brightness on the TrimUI Brick (tg5040) directly via
- * the display-engine ioctl, so the boot animation isn't dim before eros.elf
+ * the display-engine ioctl, so the boot animation isn't dim before contrarian.elf
  * applies the configured brightness. Usage: setbright <raw 0-255> */
 #include <fcntl.h>
 #include <stdlib.h>

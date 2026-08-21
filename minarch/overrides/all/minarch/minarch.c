@@ -384,12 +384,18 @@ int main(int argc , char* argv[]) {
 				last_brightness = cur_brightness;
 				last_colortemp = cur_colortemp;
 			} else {
-				/* Contrarian: track the values, show nothing. NextUI's pill is
-				 * the one piece of another firmware's chrome that was still
-				 * appearing on the television, and it does not belong on it --
-				 * same reason the button hints came out of the launcher. */
-				last_volume = cur_volume;
-				last_brightness = cur_brightness;
+				/* Contrarian: these raise the launcher's thin top line, not
+				 * NextUI's corner pill -- render_system_indicator is overridden
+				 * in common/notification.c. Colortemp is tracked but never
+				 * shown; Contrarian does not change it. */
+				if (cur_volume != last_volume) {
+					last_volume = cur_volume;
+					Notification_showSystemIndicator(SYSTEM_INDICATOR_VOLUME);
+				}
+				if (cur_brightness != last_brightness) {
+					last_brightness = cur_brightness;
+					Notification_showSystemIndicator(SYSTEM_INDICATOR_BRIGHTNESS);
+				}
 				last_colortemp = cur_colortemp;
 			}
 		}

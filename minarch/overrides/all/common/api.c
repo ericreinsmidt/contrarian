@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  *
  * Copied from NextUI (GPL-3.0) and modified for Contrarian.
- * Modification: the LEDs stay off, always.
+ * Modifications: the LEDs stay off, always; and the settings indicator is
+ * the launcher's thin top line rather than NextUI's corner pill.
  */
 #include "defines.h"
 #include "api.h"
@@ -4364,6 +4365,47 @@ void LEDS_applyRules()
 		//LOG_info("LEDS_applyRules: default/override: %i\n", LEDS_getProfileOverride());
 		LEDS_setProfile(LEDS_getProfileOverride());
 	}
+}
+
+/* ---- Contrarian: the settings line -------------------------------------
+ * The same indicator the launcher draws (plat_draw_osd in src/platform.c):
+ * a 6px near-white bar across the very top over a half-black scrim. Volume
+ * and brightness read the same in game as they do on the launcher screen,
+ * which is the whole point -- one firmware, one piece of feedback, not
+ * NextUI's pill in one place and Contrarian's line in the other.
+ *
+ * Geometry is kept in step with the launcher by construction: SCALE1(2) is
+ * 6px at this device's FIXED_SCALE of 3, matching OSD_LINE_H, and the pad is
+ * half of that, matching OSD_PAD. */
+void ctr_draw_setting_line(SDL_Surface *dst, int kind)
+{
+	int val, mn, mx, W, line_h, pad;
+	float pct;
+	SDL_Surface *scrim;
+
+	if (!dst) return;
+	if (kind == 1) { val = GetBrightness(); mn = BRIGHTNESS_MIN; mx = BRIGHTNESS_MAX; }
+	else           { val = GetVolume();     mn = VOLUME_MIN;     mx = VOLUME_MAX; }
+	pct = mx > mn ? (float)(val - mn) / (float)(mx - mn) : 0.f;
+	if (pct < 0.f) pct = 0.f; else if (pct > 1.f) pct = 1.f;
+
+	W = dst->w;
+	line_h = SCALE1(2);
+	pad = line_h / 2;
+
+	scrim = SDL_CreateRGBSurfaceWithFormat(0, W, line_h + pad * 2, 32,
+	                                       SDL_PIXELFORMAT_ARGB8888);
+	if (scrim) {
+		SDL_FillRect(scrim, NULL, SDL_MapRGB(scrim->format, 0, 0, 0));
+		SDL_SetSurfaceBlendMode(scrim, SDL_BLENDMODE_BLEND);
+		SDL_SetSurfaceAlphaMod(scrim, 128);
+		SDL_BlitSurface(scrim, NULL, dst, &(SDL_Rect){ 0, 0, 0, 0 });
+		SDL_FreeSurface(scrim);
+	}
+	SDL_FillRect(dst, &(SDL_Rect){ 0, pad, W, line_h },
+	             SDL_MapRGB(dst->format, 60, 62, 72));
+	SDL_FillRect(dst, &(SDL_Rect){ 0, pad, (int)(W * pct), line_h },
+	             SDL_MapRGB(dst->format, 235, 235, 240));
 }
 
 /* ---- Contrarian: the lights stay off ------------------------------------
