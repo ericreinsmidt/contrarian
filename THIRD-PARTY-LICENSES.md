@@ -1,7 +1,7 @@
 # Third-party notices
 
 Contrarian's own code (`src/`, `tools/`, `mk/`, the configs and scripts) is
-**0BSD**. The pieces below are not.
+**0BSD** — see [LICENSE](LICENSE). The pieces below are not.
 
 **No ROMs and no Konami artwork are distributed with Contrarian.** `contra.db`
 contains SHA-1 hashes. `contra.fp` contains truncated one-way digests of 1K ROM
