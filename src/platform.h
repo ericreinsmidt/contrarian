@@ -18,7 +18,7 @@ extern const char *P_SHARED;   /* CTR_SHARED:   /mnt/SDCARD/.userdata/shared */
 extern const char *P_FONT;     /* CTR_FONT:     /usr/trimui/res/regular.ttf */
 void paths_init(void);
 
-/* Logical buttons EROS cares about. */
+/* Logical buttons Contrarian cares about. */
 typedef enum {
 	IN_NONE = 0,
 	IN_LEFT, IN_RIGHT, IN_UP, IN_DOWN,
@@ -57,6 +57,8 @@ bool in_repeat(in_state *st, in_button b);
  * chdir to workdir if non-NULL, wait for exit. Caller must have torn down
  * video first. Returns child exit status or -1. */
 int plat_run(char *const argv[], const char *const envkv[], const char *workdir);
+/* True when the last plat_run() was cut short by the power button. */
+bool plat_run_power_pressed(void);
 
 void plat_request_poweroff(void);
 

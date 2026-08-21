@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installed to /usr/trimui/bin/runtrimui.sh by the first-boot installer.
-# Waits for the SD card, then runs its updater (EROS) if present, else stock.
+# Waits for the SD card, then runs its updater (Contrarian) if present, else stock.
 
 mounted=$(cat /proc/mounts | grep -i SDCARD)
 cnt=0

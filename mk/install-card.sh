@@ -3,7 +3,7 @@
 #
 # ONLY ever adds Contrarian's own files. It never deletes anything it did not
 # put there, and it refuses outright to touch a DO_NOT_TOUCH tree -- on the
-# development card that folder holds a working EROS install.
+# development card that folder holds another firmware install.
 set -e
 CARD=$1
 ROOT=$(cd "$(dirname "$0")/.." && pwd)

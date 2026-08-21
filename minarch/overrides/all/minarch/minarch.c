@@ -142,6 +142,29 @@ void hdmimon(void) {
  * between versions, and so the most informative possible card face. */
 #define CTR_FACE_FRAME 300
 
+/* ---- Contrarian: volume and brightness in game ------------------------- */
+/* NextUI does not change either of these itself. PWR_update() only decides
+ * which OSD to show and leaves the actual adjustment to keymon.elf, the
+ * background daemon that owns the keys system-wide. Contrarian does not run
+ * keymon -- the launcher adjusts them in process instead -- so the moment
+ * minarch took the screen, volume and brightness went dead.
+ *
+ * The buttons are all ones NextUI's own brick mapping already knows about, so
+ * this needs no raw evdev: the volume rocker is BTN_PLUS/BTN_MINUS, and the
+ * front F1/F2 keys arrive on the gamepad node as BTN_THUMBL/BTN_THUMBR, which
+ * that mapping calls BTN_L3/BTN_R3 (joystick buttons 9 and 10 on brick).
+ *
+ * No OSD call is needed: the poll further down this file already watches
+ * GetVolume()/GetBrightness() and raises the system indicator when they move.
+ * Ranges are msettings' own -- volume 0-20, brightness 0-10. */
+static void ctr_system_keys(void) {
+	int v;
+	if (PAD_justRepeated(BTN_PLUS))  { v = GetVolume();     if (v < 20) SetVolume(v + 1); }
+	if (PAD_justRepeated(BTN_MINUS)) { v = GetVolume();     if (v > 0)  SetVolume(v - 1); }
+	if (PAD_justRepeated(BTN_R3))    { v = GetBrightness(); if (v < 10) SetBrightness(v + 1); }
+	if (PAD_justRepeated(BTN_L3))    { v = GetBrightness(); if (v > 0)  SetBrightness(v - 1); }
+}
+
 static void ctr_capture_face(void) {
 	const char* path = getenv("CONTRARIAN_FACE");
 	int cw = 0, ch = 0;
@@ -221,11 +244,22 @@ int main(int argc , char* argv[]) {
 	DEVICE_PITCH = screen->pitch;
 	// LOG_info("DEVICE_SIZE: %ix%i (%i)\n", DEVICE_WIDTH,DEVICE_HEIGHT,DEVICE_PITCH);
 	
+	/* The lights are handled in the api.c override, not here: GFX_init()
+	 * calls LEDS_initLeds() from inside api.c, so dropping this call would
+	 * change nothing. Left in place so this file stays close to NextUI's. */
 	LEDS_initLeds();
 	VIB_init();
 	PWR_init();
-	if (!HAS_POWER_BUTTON)
-		PWR_disableSleep();
+	/* The power button belongs to the launcher. It is watching this process
+	 * and will terminate it on a press, then show GAME OVER and halt --  but
+	 * only if minarch does not get there first. PWR_update() calls
+	 * PWR_powerOff() directly on a press, which paints "Powering off" and
+	 * cuts power immediately; disabling it makes PWR_powerOff a no-op and
+	 * leaves the press for the launcher. Sleep goes with it: BTN_SLEEP is
+	 * BTN_POWER on this device, so leaving sleep armed would swallow the
+	 * same press. */
+	PWR_disablePowerOff();
+	PWR_disableSleep();
 	MSG_init();
 	IMG_Init(IMG_INIT_PNG);
 	Core_open(core_path, tag_name);
@@ -323,6 +357,10 @@ int main(int argc , char* argv[]) {
 			static int ctr_frames = 0;
 			if (++ctr_frames == CTR_FACE_FRAME) ctr_capture_face();
 		}
+
+		/* Volume and brightness. run_frame() has just polled the pad, so the
+		 * button state read here is this frame's. */
+		ctr_system_keys();
 		
 		// Process RetroAchievements for this frame
 		RA_doFrame();
@@ -346,22 +384,13 @@ int main(int argc , char* argv[]) {
 				last_brightness = cur_brightness;
 				last_colortemp = cur_colortemp;
 			} else {
-				// Check for changes
-				if (cur_volume != last_volume) {
-					last_volume = cur_volume;
-					if (CFG_getNotifyAdjustments())
-						Notification_showSystemIndicator(SYSTEM_INDICATOR_VOLUME);
-				}
-				if (cur_brightness != last_brightness) {
-					last_brightness = cur_brightness;
-					if (CFG_getNotifyAdjustments())
-						Notification_showSystemIndicator(SYSTEM_INDICATOR_BRIGHTNESS);
-				}
-				if (cur_colortemp != last_colortemp) {
-					last_colortemp = cur_colortemp;
-					if (CFG_getNotifyAdjustments())
-						Notification_showSystemIndicator(SYSTEM_INDICATOR_COLORTEMP);
-				}
+				/* Contrarian: track the values, show nothing. NextUI's pill is
+				 * the one piece of another firmware's chrome that was still
+				 * appearing on the television, and it does not belong on it --
+				 * same reason the button hints came out of the launcher. */
+				last_volume = cur_volume;
+				last_brightness = cur_brightness;
+				last_colortemp = cur_colortemp;
 			}
 		}
 		

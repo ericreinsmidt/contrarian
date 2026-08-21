@@ -239,6 +239,8 @@ static void tv_on(app *a)
 	}
 }
 
+static void power_off(app *a);
+
 static void launch(app *a)
 {
 	ctr_item *it;
@@ -343,8 +345,15 @@ static void launch(app *a)
 	font_init(a->r);
 	blip_init_res(a->res_dir);
 	if (view_get(a->view)->load) view_get(a->view)->load(a);
-	tv_off(a);
 	memset(&a->in, 0, sizeof a->in);
+
+	/* Power was pressed during the game. minarch no longer handles that key
+	 * itself, so the press came here: the launcher has just been rebuilt far
+	 * enough to draw, and GAME OVER is what it draws. No tv_off first -- the
+	 * set does not tune back to a channel on its way out. */
+	if (plat_run_power_pressed()) { power_off(a); return; }
+
+	tv_off(a);
 }
 
 /* ---------- input -------------------------------------------------------- */

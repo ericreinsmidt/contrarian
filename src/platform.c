@@ -9,7 +9,7 @@
 
 /* Front function buttons on the Brick report on the gamepad node (event3)
  * as BTN_THUMBL / BTN_THUMBR (verified by capture on hardware). SDL doesn't
- * map these to anything EROS uses, so we read them raw. */
+ * map these to anything Contrarian uses, so we read them raw. */
 #define CODE_FN_LEFT  317
 #define CODE_FN_RIGHT 318
 #include <stdio.h>
@@ -39,7 +39,7 @@ static int fd_power = -1; /* axp2202-pek: KEY_POWER */
 static int fd_keys = -1;  /* sunxi-keyboard: volume keys */
 static int fd_joy = -1;   /* TRIMUI Player1: raw, for the FN buttons */
 
-/* Opt-in via EROS_INPUT_DEBUG=1: log raw evdev codes + SDL joystick button
+/* Opt-in via CTR_INPUT_DEBUG=1: log raw evdev codes + SDL joystick button
  * indices so a single button press reveals exactly which source a control
  * arrives on. Off by default; costs nothing in normal runs. */
 static int dbg_input;
@@ -74,7 +74,7 @@ bool plat_video_init(void)
 		return false;
 	}
 	SDL_ShowCursor(SDL_DISABLE);
-	win = SDL_CreateWindow("EROS", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+	win = SDL_CreateWindow("Contrarian", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
 	                       CTR_SCREEN_W, CTR_SCREEN_H,
 	                       SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
 	if (!win) {
@@ -114,7 +114,7 @@ static void open_joystick(void)
 
 bool plat_input_init(void)
 {
-	dbg_input = getenv("EROS_INPUT_DEBUG") != NULL ||
+	dbg_input = getenv("CTR_INPUT_DEBUG") != NULL ||
 	            access("/mnt/SDCARD/Contrarian/.input_debug", F_OK) == 0;
 	if (SDL_InitSubSystem(SDL_INIT_JOYSTICK) != 0) {
 		fprintf(stderr, "joystick init: %s\n", SDL_GetError());
@@ -258,9 +258,19 @@ bool in_repeat(in_state *st, in_button b)
 	return true;
 }
 
+/* Whether the last plat_run() ended because the player hit power rather than
+ * because the child chose to exit. The launcher owns the shutdown sequence --
+ * GAME OVER on the set, then halt -- so it has to be able to tell the two
+ * apart when the child returns. */
+static bool run_power_pressed;
+
+bool plat_run_power_pressed(void) { return run_power_pressed; }
+
 int plat_run(char *const argv[], const char *const envkv[], const char *workdir)
 {
-	pid_t pid = fork();
+	pid_t pid;
+	run_power_pressed = false;
+	pid = fork();
 	if (pid < 0) return -1;
 	if (pid == 0) {
 		if (workdir) {
@@ -289,6 +299,7 @@ int plat_run(char *const argv[], const char *const envkv[], const char *workdir)
 		while (fd_power >= 0 && read(fd_power, &ev, sizeof ev) == (ssize_t)sizeof ev) {
 			if (ev.type == EV_KEY && ev.code == KEY_POWER && ev.value == 1 &&
 			    ms_since_term < 0) {
+				run_power_pressed = true;
 				kill(pid, SIGTERM);
 				ms_since_term = 0;
 			}
@@ -454,11 +465,11 @@ void plat_brightness_set(int level)
 /* ---- battery ---- */
 
 /* Fill *pct (0..100) and *charging from the AXP2202 fuel gauge. Returns false
- * when no reading is available (e.g. the native dev build). EROS_FAKE_BATT
+ * when no reading is available (e.g. the native dev build). CTR_FAKE_BATT
  * forces a level for testing the low-battery indicator. */
 bool plat_battery(int *pct, bool *charging)
 {
-	const char *fake = getenv("EROS_FAKE_BATT");
+	const char *fake = getenv("CTR_FAKE_BATT");
 	if (fake && *fake) {
 		if (pct) *pct = atoi(fake);
 		if (charging) *charging = false;

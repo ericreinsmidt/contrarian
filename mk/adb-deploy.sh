@@ -20,13 +20,24 @@ done)}
 [ -n "$SER" ] || { echo "no TrimUI found over adb (is it powered on?)"; exit 1; }
 A="adb -s $SER"
 
-$A shell 'mount | grep -q /mnt/SDCARD' || {
-	echo "!! /mnt/SDCARD is not mounted on the device."
-	echo "   The SD slot reads empty -- reseat the card and try again."
+# Is the card actually mounted? This has to be checked by looking at OUTPUT,
+# not at an exit status: `adb shell` returns 0 regardless of what the remote
+# command exited with, so the obvious `adb shell '... | grep -q ...' || exit`
+# is silently always-true. When the card had dropped off the bus mid-session
+# that guard waved the deploy through and every push landed in the RAM-backed
+# overlay under the empty mountpoint -- reporting success, changing nothing.
+case "$($A shell 'mount | grep -q " /mnt/SDCARD " && echo MOUNTED')" in
+*MOUNTED*) ;;
+*)
+	echo "!! /mnt/SDCARD is not mounted on the device -- nothing was deployed."
+	echo "   Anything written there now would go to RAM, not the card."
+	echo "   Reseat the SD card and reboot the device, then run this again."
 	exit 1
-}
+	;;
+esac
 
 $A shell "mkdir -p $C/res/room $C/res/audio $C/res/nes $C/cores $C/lib $C/faces $C/patches \
+          /mnt/SDCARD/.tmp_update \
           /mnt/SDCARD/Shaders/glsl /mnt/SDCARD/.userdata/shared \
           /mnt/SDCARD/Overlays/Contra \
           /mnt/SDCARD/.system/tg5040/paks/Emus/Contra.pak" >/dev/null
