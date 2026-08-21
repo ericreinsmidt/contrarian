@@ -25,6 +25,40 @@
 static const char *shot_path;
 static int shot_ms = 0, shot_cursor = 0, shot_view = -1;
 
+/* Startup stopwatch. Boot time is the one thing a novelty firmware cannot be
+ * careless about -- five seconds of animation is a choice, everything after it
+ * is a cost -- so the phases are timed and logged rather than guessed at. */
+static unsigned t_boot0;
+static void t_mark(const char *what)
+{
+	fprintf(stderr, "boot: %-14s %5u ms\n", what, plat_now_ms() - t_boot0);
+}
+
+/* The boot animation plays in a background process while everything above
+ * runs -- scan, GL init, asset decode, the lot. Both it and this process draw
+ * to /dev/fb0, so presenting now would fight it: last writer wins, at 60fps
+ * against its 30. Wait for it to clear the marker, then draw.
+ *
+ * Bounded, because a boot that hangs behind a stuck decoder would be a far
+ * worse bug than a seam in an animation. Absent marker means no animation is
+ * playing -- every launcher restart after a game -- and this returns at once. */
+static void wait_for_boot_anim(void)
+{
+	const char *flag = getenv("CTR_ANIM_FLAG");
+	unsigned start;
+
+	if (!flag || !*flag || access(flag, F_OK) != 0) return;
+	start = plat_now_ms();
+	while (access(flag, F_OK) == 0) {
+		if (plat_now_ms() - start > 8000u) {
+			fprintf(stderr, "boot: animation flag stuck, drawing anyway\n");
+			break;
+		}
+		SDL_Delay(16);
+	}
+	t_mark("anim wait");
+}
+
 /* ---------- views -------------------------------------------------------- */
 
 static void view_switch(app *a, int idx)
@@ -486,6 +520,7 @@ int main(int argc, char **argv)
 		}
 	}
 
+	t_boot0 = plat_now_ms();
 	paths_init();
 	build_child_env();
 
@@ -507,14 +542,23 @@ int main(int argc, char **argv)
 	        a.list.count, a.list.n_verified, a.list.n_hack, a.list.n_reject,
 	        a.list.n_cached);
 
+	/* --scan: warm the verdict cache and stop, touching neither the display
+	 * nor the input devices. launch.sh runs this behind the boot animation so
+	 * the cold scan -- inflating every zip on the card to hash it -- happens
+	 * during five seconds the boot is already spending, instead of after them.
+	 * The real launcher then finds every verdict cached and starts at once. */
+	t_mark("scan");
+
 	if (!plat_video_init()) { fprintf(stderr, "video init failed\n"); return 1; }
 	IMG_Init(IMG_INIT_PNG);
 	a.r = plat_renderer();
 	plat_input_init();
 	plat_settings_init();
 	plat_leds_off();
+	t_mark("video+input");
 	if (!font_init(a.r)) fprintf(stderr, "font init failed\n");
 	blip_init_res(a.res_dir);
+	t_mark("font+audio");
 
 	a.t0 = plat_now_ms();
 	a.cursor = shot_path ? ((shot_cursor < a.list.count) ? shot_cursor : 0)
@@ -524,6 +568,7 @@ int main(int argc, char **argv)
 	a.view = view_idx;
 	if (view_get(a.view)->load && !view_get(a.view)->load(&a))
 		fprintf(stderr, "view '%s' failed to load\n", view_get(a.view)->name);
+	t_mark("view assets");
 
 	if (shot_path) {
 		SDL_Surface *out;
@@ -546,6 +591,8 @@ int main(int argc, char **argv)
 		plat_video_quit();
 		return 0;
 	}
+
+	wait_for_boot_anim();
 
 	while (a.running) {
 		plat_input_poll(&a.in);

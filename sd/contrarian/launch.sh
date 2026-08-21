@@ -16,6 +16,11 @@ export CORES_PATH=$CTR_DIR/cores
 export USERDATA_PATH=$SDCARD/.userdata/tg5040
 export SHARED_USERDATA_PATH=$SDCARD/.userdata/shared
 export LOGS_PATH=$USERDATA_PATH/logs
+
+# Cleared by the boot animation when it finishes; the launcher waits on it
+# before presenting its first frame. See the animation block below.
+CTR_ANIM_FLAG=/tmp/contrarian_bootanim
+export CTR_ANIM_FLAG
 export HOME=$USERDATA_PATH
 export LD_LIBRARY_PATH=$CTR_DIR/lib:/usr/trimui/lib:$LD_LIBRARY_PATH
 export PATH=/usr/trimui/bin:$PATH
@@ -97,13 +102,34 @@ BB
 	touch "$CTR_DIR/.brightboot_applied"
 fi
 
-# Boot animation: the Konami Code entered on black, then the set snaps on.
-# Played straight to the framebuffer before the launcher takes the display; the
-# last frame holds until the Cover Flow draws over it. The first (cold) card
-# scan happens behind this, so the inflate cost has no visible existence.
+# Boot animation: the Konami Code entered on black, then the logo.
+#
+# Played in the BACKGROUND, so everything below -- and, more to the point, the
+# launcher's own ~830ms of startup -- happens while it is on screen instead of
+# after it. An animation that adds its length to the boot is just a delay with
+# a picture on it.
+#
+# ffmpeg and the launcher both write to /dev/fb0, so they must not both be
+# drawing: last writer wins and they would fight at 30 vs 60fps. The marker
+# file is the handshake -- the launcher does all of its work (scan, GL init,
+# asset decode) while this plays, then blocks on the marker and presents its
+# first frame the moment the animation clears it. Removed in the same
+# subshell so it goes even if ffmpeg dies.
 if [ -f "$CTR_DIR/contrarian-boot.mp4" ]; then
-	ffmpeg -hide_banner -loglevel quiet -re -i "$CTR_DIR/contrarian-boot.mp4" \
-	       -pix_fmt bgra -f fbdev /dev/fb0 2> /dev/null
+	: > "$CTR_ANIM_FLAG"
+	(
+		ffmpeg -hide_banner -loglevel quiet -re -i "$CTR_DIR/contrarian-boot.mp4" \
+		       -pix_fmt bgra -f fbdev /dev/fb0 2> /dev/null
+		rm -f "$CTR_ANIM_FLAG"
+	) &
+
+	# Free seconds: pull what the first game launch will need off the card and
+	# into the page cache while nothing else is using the disk. Cold reads of
+	# minarch, the core and its libraries measure ~190ms against ~30ms warm.
+	(
+		cat "$CTR_DIR/minarch.elf" "$CTR_DIR/cores/"*.so "$CTR_DIR/lib/"* > /dev/null 2>&1
+		for z in /mnt/SDCARD/*.zip; do [ -f "$z" ] && cat "$z" > /dev/null 2>&1; done
+	) &
 fi
 
 # Rumble off, mute-switch gpio readable
