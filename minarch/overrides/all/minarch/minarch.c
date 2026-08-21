@@ -234,6 +234,11 @@ int main(int argc , char* argv[]) {
 	
 	screen = GFX_init(MODE_MENU);
 
+	/* Startup is dominated by this one call -- SDL video plus the EGL/GL
+	 * context, ~620ms of the ~1100ms it takes to reach a running game.
+	 * Logged because it is the number that decides whether launching is
+	 * ever going to be quick. */
+	LOG_info("ma: gfx_init %ims\n", SDL_GetTicks());
 	// initialize default shaders
 	GFX_initShaders();
 	PLAT_initNotificationTexture();
@@ -264,6 +269,7 @@ int main(int argc , char* argv[]) {
 	IMG_Init(IMG_INIT_PNG);
 	Core_open(core_path, tag_name);
 
+	LOG_info("ma: core_dlopen %ims\n", SDL_GetTicks());
 	Game_open(rom_path); // nes tries to load gamegenie setting before this returns ffs
 	if (!game.is_open) goto finish;
 	
@@ -296,6 +302,7 @@ int main(int argc , char* argv[]) {
 	SND_init(core.sample_rate, core.fps);
 	SND_registerDeviceWatcher(Audio_onSinkChanged);
 	InitSettings(); // after we initialize audio
+	LOG_info("ma: snd+settings %ims\n", SDL_GetTicks());
 	Menu_init();
 	Notification_init();
 	
