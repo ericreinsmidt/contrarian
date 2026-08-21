@@ -371,9 +371,17 @@ static void launch(app *a)
 			 * much taken off what the player waits through -- the same
 			 * reason the boot animation runs alongside startup. */
 			tv_on(a);
-			plat_resident_wait();
-			resident = true;
-			fprintf(stderr, "resident game finished\n");
+			/* False means it died mid-game rather than finishing. The
+			 * display was never torn down, so the launcher can simply carry
+			 * on -- but it must not be treated as a clean finish, or the
+			 * dead resident is never replaced. */
+			if (plat_resident_wait()) {
+				resident = true;
+				fprintf(stderr, "resident game finished\n");
+			} else {
+				resident = true;
+				fprintf(stderr, "resident died mid-game\n");
+			}
 		} else {
 			fprintf(stderr, "resident minarch did not answer, falling back\n");
 		}
@@ -412,7 +420,7 @@ static void launch(app *a)
 	}
 	/* A launch that fell back means there is no resident; start one so the
 	 * next launch is fast again. */
-	if (!resident) plat_spawn_resident(elf, core, env);
+	plat_spawn_resident(elf, core, env);   /* no-op while one is alive */
 
 	remember_last_played(a, it);
 	if (a->db.dirty) { db_save(a->db_path, &a->db); a->db.dirty = false; }

@@ -3036,6 +3036,25 @@ void SND_init(double sample_rate, double frame_rate)
 
 }
 
+/* SND_quit tears down SDL's whole audio subsystem, which measures ~280ms --
+ * far more than the ~137ms to open a device. Closing just the device leaves
+ * the subsystem up, so a reopen for different timing skips both that teardown
+ * and the matching SDL_InitSubSystem. Used when a game's frame rate differs
+ * from the last one's (NTSC after PAL); full SND_quit is still what runs when
+ * the process is going away. */
+void ctr_snd_close_device(void)
+{
+	if (!snd.initialized) return;
+	SND_pauseAudio(true);
+#if defined(USE_SDL2)
+	SDL_CloseAudioDevice(snd.device_id);
+#else
+	SDL_CloseAudio();
+#endif
+	snd.initialized = 0;
+	if (snd.buffer) { free(snd.buffer); snd.buffer = NULL; }
+}
+
 void SND_quit(void)
 {
 	if (!snd.initialized)

@@ -366,6 +366,14 @@ static pid_t resident_pid(void)
 bool plat_resident_ready(void)
 {
 	struct stat st;
+	pid_t pid;
+
+	/* The fifos are nodes in /tmp and outlive a crash, so their existence
+	 * proves nothing -- and this answer gates the respawn, so believing them
+	 * would leave a dead resident dead and every later launch on the slow
+	 * path. The pid is what says something is actually listening. */
+	pid = resident_pid();
+	if (pid <= 0 || kill(pid, 0) != 0) return false;
 	return stat(CTR_REQ, &st) == 0 && S_ISFIFO(st.st_mode) &&
 	       stat(CTR_REP, &st) == 0 && S_ISFIFO(st.st_mode);
 }

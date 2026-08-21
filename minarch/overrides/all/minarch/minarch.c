@@ -243,6 +243,22 @@ static uint32_t ctr_req_ms;      /* when the current request arrived */
  * again for the next game, which reads screen->format, so it has to be put
  * back first. */
 static SDL_Surface *ctr_screen;
+
+/* Opening the ALSA device costs ~137ms, and it was being paid on every launch
+ * because the device was closed between games. It never needed to be: the
+ * default playback path here runs through dmix (see /etc/asound.conf), so the
+ * launcher can play its own sounds while a game holds the device -- verified
+ * by playing through the default device with a game running. The comment this
+ * replaces claimed the opposite and was never tested.
+ *
+ * So the device stays open, paused, between games, and is reopened only when
+ * the timing actually changes: SND_init sizes its buffers from the core's
+ * sample rate and frame rate, and an NTSC game and a PAL one disagree on the
+ * latter. Relaunching the same version reuses the open device. */
+extern void ctr_snd_close_device(void);
+
+static bool   ctr_snd_open;
+static double ctr_snd_rate, ctr_snd_fps;
 static char ctr_core_path[MAX_PATH];
 static char ctr_tag[MAX_PATH];
 
@@ -343,8 +359,17 @@ static int run_one_game(char *rom_path)
 
 	// Mute audio during startup to avoid pops (InitSettings would be logical, but too late)
 	SND_overrideMute(1);
-	SND_init(core.sample_rate, core.fps);
-	SND_registerDeviceWatcher(Audio_onSinkChanged);
+	if (ctr_snd_open && core.sample_rate == ctr_snd_rate &&
+	    core.fps == ctr_snd_fps) {
+		SND_pauseAudio(false);          /* same timing: keep the open device */
+	} else {
+		if (ctr_snd_open) ctr_snd_close_device();
+		SND_init(core.sample_rate, core.fps);
+		SND_registerDeviceWatcher(Audio_onSinkChanged);
+		ctr_snd_open = true;
+		ctr_snd_rate = core.sample_rate;
+		ctr_snd_fps  = core.fps;
+	}
 	LOG_info("ma: snd+settings %ims\n", SDL_GetTicks());
 	Menu_init();
 	Notification_init();
@@ -522,12 +547,15 @@ static int run_one_game(char *rom_path)
 	Core_quit();
 	Config_quit();
 	Special_quit();
-	SND_quit();
+	/* Paused, not closed: the launcher's sounds mix alongside it, and the next
+	 * launch of the same version skips the ~137ms device open. */
+	SND_pauseAudio(true);
 	return 0;
 }
 
 static void resident_quit(void)
 {
+	if (ctr_snd_open) { SND_quit(); ctr_snd_open = false; }
 	QuitSettings();
 	Core_close();
 	MSG_quit();
