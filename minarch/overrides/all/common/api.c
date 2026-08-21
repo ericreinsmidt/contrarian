@@ -3036,12 +3036,50 @@ void SND_init(double sample_rate, double frame_rate)
 
 }
 
+/* Changing a game's FRAME rate does not need a different audio device, which
+ * is what the reopen this replaces was for. SND_init sizes the ring buffer
+ * from SCREEN_FPS -- the panel's refresh rate, a compile-time constant -- and
+ * opens the device at the core's SAMPLE rate. The core's frame rate reaches
+ * only two doubles: snd.frame_rate, which is the numerator of the resampler
+ * ratio, and perf.req_fps, which is a stats field. NTSC and PAL therefore ask
+ * ALSA for byte-identical devices (48000Hz stereo, 6375-frame buffer), and
+ * closing and reopening one to turn 60.0998 into 50.0070 was spending ~285ms
+ * of every region-changing launch to assign a variable.
+ *
+ * The ring buffer is emptied the way SND_resizeBuffer does it, so a new game
+ * does not open by playing the tail of the last one. Everything else already
+ * survives between games untouched -- relaunching the same region has always
+ * reused the device without re-initialising any of it. */
+void ctr_snd_retune(double frame_rate)
+{
+	if (!snd.initialized) return;
+
+#if defined(USE_SDL2)
+	SDL_LockAudioDevice(snd.device_id);
+#else
+	SDL_LockAudio();
+#endif
+
+	snd.frame_rate = frame_rate;
+	perf.req_fps   = frame_rate;
+	snd.frame_in = snd.frame_out = snd.frame_filled = 0;
+	if (snd.buffer) memset(snd.buffer, 0, snd.frame_count * sizeof(SND_Frame));
+
+#if defined(USE_SDL2)
+	SDL_UnlockAudioDevice(snd.device_id);
+#else
+	SDL_UnlockAudio();
+#endif
+
+	LOG_info("ctr_snd_retune: now %.4ffps on the open device\n", frame_rate);
+}
+
 /* SND_quit tears down SDL's whole audio subsystem, which measures ~280ms --
  * far more than the ~137ms to open a device. Closing just the device leaves
  * the subsystem up, so a reopen for different timing skips both that teardown
- * and the matching SDL_InitSubSystem. Used when a game's frame rate differs
- * from the last one's (NTSC after PAL); full SND_quit is still what runs when
- * the process is going away. */
+ * and the matching SDL_InitSubSystem. Only a change of SAMPLE rate needs this
+ * now -- a change of frame rate is ctr_snd_retune above -- and full SND_quit
+ * is still what runs when the process is going away. */
 void ctr_snd_close_device(void)
 {
 	if (!snd.initialized) return;

@@ -220,11 +220,10 @@ static void ctr_capture_face(void) {
  * cost of STARTING A PROCESS, so it is paid once, at boot, behind the boot
  * animation -- and every launch after that is just the 36ms.
  *
- * The process sits blocked on a FIFO between games, holding the GL context and
- * the core but nothing exclusive: the audio device is released so the
- * launcher's own sounds keep working (verified on hardware -- SND_quit frees
- * the device while this process stays alive, and SND_init takes it back), and
- * being blocked means it reads no input and draws no frames.
+ * The process sits blocked on a FIFO between games, holding the GL context,
+ * the core and a paused audio device -- none of which the launcher needs back,
+ * since playback goes through dmix and being blocked means this process reads
+ * no input and draws no frames.
  *
  * The launcher falls back to running this program the old way, one game per
  * process, if the resident one is not answering. That fallback is why the
@@ -254,8 +253,14 @@ static SDL_Surface *ctr_screen;
  * So the device stays open, paused, between games, and is reopened only when
  * the timing actually changes: SND_init sizes its buffers from the core's
  * sample rate and frame rate, and an NTSC game and a PAL one disagree on the
- * latter. Relaunching the same version reuses the open device. */
+ * latter. Relaunching the same version reuses the open device.
+ *
+ * A different FRAME rate turned out not to need a different device at all --
+ * see ctr_snd_retune in api.c. The reopen is kept only for a change of SAMPLE
+ * rate, which the core can be made to do through its sound options and which
+ * really does need a new device. */
 extern void ctr_snd_close_device(void);
+extern void ctr_snd_retune(double frame_rate);
 
 static bool   ctr_snd_open;
 static double ctr_snd_rate, ctr_snd_fps;
@@ -359,9 +364,18 @@ static int run_one_game(char *rom_path)
 
 	// Mute audio during startup to avoid pops (InitSettings would be logical, but too late)
 	SND_overrideMute(1);
-	if (ctr_snd_open && core.sample_rate == ctr_snd_rate &&
-	    core.fps == ctr_snd_fps) {
-		SND_pauseAudio(false);          /* same timing: keep the open device */
+	/* Logged because these two numbers are the whole reason the audio device
+	 * is ever touched between games, and because the frame rate is measured
+	 * rather than guessed: fceumm reports 60.0998 for NTSC and 50.0070 for
+	 * PAL, not the 60.0988/50.0070 the NES is usually quoted at. */
+	LOG_info("resident: core wants %.4ffps @ %.0fHz\n", core.fps, core.sample_rate);
+	if (ctr_snd_open && core.sample_rate == ctr_snd_rate) {
+		/* Same device either way; only the resampler has to be told. */
+		if (core.fps != ctr_snd_fps) {
+			ctr_snd_retune(core.fps);
+			ctr_snd_fps = core.fps;
+		}
+		SND_pauseAudio(false);
 	} else {
 		if (ctr_snd_open) ctr_snd_close_device();
 		SND_init(core.sample_rate, core.fps);
