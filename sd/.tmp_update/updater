@@ -1,0 +1,21 @@
+#!/bin/sh
+# Contrarian SD-boot entry. Stock runtrimui.sh runs this when present on the card.
+
+INFO=$(cat /proc/cpuinfo 2> /dev/null)
+case $INFO in
+*TG5040*|*TG3040*) ;;
+*)
+	# Not a Brick / Brick Hammer: fall back to stock rather than half-booting.
+	if [ -f /usr/trimui/bin/runtrimui-original.sh ]; then
+		exec /usr/trimui/bin/runtrimui-original.sh
+	fi
+	exit 1
+	;;
+esac
+
+/mnt/SDCARD/.tmp_update/tg5040.sh
+
+# The launch loop only returns for poweroff; make sure it sticks.
+echo s > /proc/sysrq-trigger
+echo u > /proc/sysrq-trigger
+echo o > /proc/sysrq-trigger

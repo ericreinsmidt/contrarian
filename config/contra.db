@@ -1,0 +1,17 @@
+# Contrarian known-ROM database.
+# payload-sha1 | title | region | tv | mapper | crt | crop | note
+#
+# payload-sha1 is SHA-1 of the ROM with its iNES header stripped, so header dirt
+# and re-zipping never change a ROM's identity.
+#
+# region is display only. tv drives fceumm's timing per entry and is never a
+# global setting: Probotector is a PAL build and runs subtly wrong for its whole
+# duration at 60Hz. USA and JAPAN are both NTSC but must still read differently.
+#
+# crt is the per-ROM shader answer, written back when Y is pressed. Default is
+# OFF: on a 3.2" panel the scanlines cost more legibility than they buy. The
+# shader is still shipped and one button away.
+# crop is per-ROM overscan, default off.
+979494e7869ac7ab4815fdbd1dc99f893f713fbf|CONTRA|USA|NTSC|2|0|0|CHR-RAM
+be9dd65be8db897978dd34533dd3a037784a8ee9|CONTRA|JAPAN|NTSC|23|0|0|VRC2b, animated cutscenes
+999aca2dfdbdcc164ddab12282290247f4ce21e1|PROBOTECTOR|EUROPE|PAL|2|0|0|robots, 50Hz

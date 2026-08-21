@@ -1,0 +1,26 @@
+# Build products
+/build/
+/build-native/
+/out/
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+._*
+
+# Source media the shipped assets in res/ were made from. Kept locally for
+# provenance; not needed to build, so not carried in the repo.
+/assets/
+
+# Design notes. Kept locally; not needed to build, so not carried in the repo.
+/DESIGN.md
+
+# The shelf-of-televisions view and its art. Built and working, but not in the
+# registry -- the room view is the one that ships. Kept locally.
+/src/view_coverflow.c
+/src/coverflow.c
+/src/coverflow.h
+/res/tv/
