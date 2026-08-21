@@ -8,6 +8,12 @@
  * Enabled only when CONTRARIAN_FACE names a path that does not exist yet.
  */
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <signal.h>
+#include <fcntl.h>
 #include <msettings.h>
 
 #include <SDL2/SDL_image.h>
@@ -207,31 +213,41 @@ static void ctr_capture_face(void) {
 	free(pixels);
 }
 
-int main(int argc , char* argv[]) {
-	//static char asoundpath[MAX_PATH];
-	//sprintf(asoundpath, "%s/.asoundrc", getenv("HOME"));
-	//LOG_info("minarch: need asoundrc at %s\n", asoundpath);
-	//if(exists(asoundpath))
-	//	LOG_info("asoundrc exists at %s\n", asoundpath);
-	//else 
-	//	LOG_info("asoundrc does not exist at %s\n", asoundpath);
+/* ---- Contrarian: residency -----------------------------------------------
+ * Launching a game costs ~1100ms, and almost none of it is the game: the
+ * EGL/GL context is ~620ms, the core dlopen ~170ms, audio and settings ~140ms,
+ * while opening the ROM itself is ~36ms. All of that except the ROM is the
+ * cost of STARTING A PROCESS, so it is paid once, at boot, behind the boot
+ * animation -- and every launch after that is just the 36ms.
+ *
+ * The process sits blocked on a FIFO between games, holding the GL context and
+ * the core but nothing exclusive: the audio device is released so the
+ * launcher's own sounds keep working (verified on hardware -- SND_quit frees
+ * the device while this process stays alive, and SND_init takes it back), and
+ * being blocked means it reads no input and draws no frames.
+ *
+ * The launcher falls back to running this program the old way, one game per
+ * process, if the resident one is not answering. That fallback is why the
+ * classic path below is still here. */
+/* End the running game without ending the process. The launcher's power
+ * button watcher used to SIGTERM minarch, which is still right when minarch is
+ * one game per process -- but would take residency down with it. SIGUSR1 ends
+ * the game only; the process falls back to waiting on the fifo. */
+static void ctr_end_game(int sig) { (void)sig; quit = 1; }
 
-	if(argc < 2)
-		return EXIT_FAILURE;
+static uint32_t ctr_req_ms;      /* when the current request arrived */
+/* The real screen surface, as GFX_init returned it. The quit animation at the
+ * end of a game reassigns the global `screen` to a temporary surface and then
+ * frees it, leaving it dangling -- which no one noticed because the process
+ * always exited immediately afterwards. A resident process runs Menu_init()
+ * again for the next game, which reads screen->format, so it has to be put
+ * back first. */
+static SDL_Surface *ctr_screen;
+static char ctr_core_path[MAX_PATH];
+static char ctr_tag[MAX_PATH];
 
-	PWR_setCPUSpeed(CPU_SPEED_PERFORMANCE); // start in performance mode for fast loading
-	PWR_pinToCores(CPU_CORE_PERFORMANCE); // thread affinity
-
-	char core_path[MAX_PATH];
-	char rom_path[MAX_PATH];
-	char tag_name[MAX_PATH];
-
-	strcpy(core_path, argv[1]);
-	strcpy(rom_path, argv[2]);
-	getEmuName(rom_path, tag_name);
-	
-	LOG_info("rom_path: %s\n", rom_path);
-	
+static void resident_init(void)
+{
 	screen = GFX_init(MODE_MENU);
 
 	/* Startup is dominated by this one call -- SDL video plus the EGL/GL
@@ -267,11 +283,39 @@ int main(int argc , char* argv[]) {
 	PWR_disableSleep();
 	MSG_init();
 	IMG_Init(IMG_INIT_PNG);
-	Core_open(core_path, tag_name);
+	Core_open(ctr_core_path, ctr_tag);
 
 	LOG_info("ma: core_dlopen %ims\n", SDL_GetTicks());
+
+	/* Once, before any audio: re-running InitSettings per game re-initialises
+	 * the codec and pops the speaker on every launch. */
+	InitSettings();
+	ctr_screen = screen;
+}
+
+/* Everything a single game needs, set up and torn back down. Returns 0 when
+ * the game ran, -1 if the ROM would not open. */
+static int run_one_game(char *rom_path)
+{
+	/* Restore the screen the previous game's quit animation left dangling. */
+	if (ctr_screen) screen = ctr_screen;
+
+	/* Per-game globals. A resident process runs this more than once, so
+	 * anything the frame loop accumulates has to start clean. */
+	quit = 0; show_menu = 0; newScreenshot = 0;
+	fast_forward = 0; ff_toggled = 0; ff_hold_active = 0;
+	rewind_pressed = 0; rewind_toggle = 0; last_rewind_pressed = 0;
+	rewinding = 0; ff_paused_by_rewind_hold = 0;
+	rewind_init_ready = 0; shader_reset_suppressed = 0;
+
+	/* Were statics in NextUI, where the process only ever ran one game. As
+	 * locals they reset per game: the face grab fires for each new ROM, and
+	 * the -1 sentinel stops a launch from flashing the settings line. */
+	int ctr_frames = 0;
+	int last_volume = -1, last_brightness = -1, last_colortemp = -1;
+
 	Game_open(rom_path); // nes tries to load gamegenie setting before this returns ffs
-	if (!game.is_open) goto finish;
+	if (!game.is_open) { LOG_warn("could not open %s\n", rom_path); return -1; }
 	
 	simple_mode = exists(SIMPLE_MODE_PATH);
 	
@@ -301,7 +345,6 @@ int main(int argc , char* argv[]) {
 	SND_overrideMute(1);
 	SND_init(core.sample_rate, core.fps);
 	SND_registerDeviceWatcher(Audio_onSinkChanged);
-	InitSettings(); // after we initialize audio
 	LOG_info("ma: snd+settings %ims\n", SDL_GetTicks());
 	Menu_init();
 	Notification_init();
@@ -346,7 +389,10 @@ int main(int argc , char* argv[]) {
 	// release config when all is loaded
 	Config_free();
 
-	LOG_info("total startup time %ims\n\n",SDL_GetTicks());
+	if (ctr_req_ms)
+		LOG_info("resident: game up in %ums\n", SDL_GetTicks() - ctr_req_ms);
+	else
+		LOG_info("total startup time %ims\n\n",SDL_GetTicks());
 	
 	// we started in performance mode, now reset to the desired mode
 	// if the config didn't specify the desired cpu speed, the default is 0 = auto
@@ -361,7 +407,6 @@ int main(int argc , char* argv[]) {
 		 * than milliseconds so it lands at the same point in the game on both
 		 * NTSC and PAL builds. */
 		{
-			static int ctr_frames = 0;
 			if (++ctr_frames == CTR_FACE_FRAME) ctr_capture_face();
 		}
 
@@ -377,9 +422,6 @@ int main(int argc , char* argv[]) {
 		
 		// Poll for volume/brightness/colortemp changes and show system indicators
 		{
-			static int last_volume = -1;
-			static int last_brightness = -1;
-			static int last_colortemp = -1;
 			
 			int cur_volume = GetVolume();
 			int cur_brightness = GetBrightness();
@@ -451,35 +493,176 @@ int main(int argc , char* argv[]) {
 	PLAT_clearTurbo();
 
 	Menu_quit();
-	QuitSettings();
+	/* QuitSettings() used to sit here. It belongs to the process, not to one
+	 * game: settings are initialised once at residency init (re-running
+	 * InitSettings per game re-inits the codec and pops the speaker), so
+	 * tearing them down after every game would leave the next one without
+	 * any. Moved to resident_quit(). */
 
-finish:
-    Perf_setCPUMonitorEnabled(0);
 
-	// Unload game and shutdown RetroAchievements before Notification_quit —
-	// RA background threads (sync, badge downloads) may call notification
-	// APIs, so the notification mutex should outlive all RA threads.
+	/* Per-game teardown. The GL context, the pad, the loaded core object and
+	 * the settings all stay -- that is the entire point. Menu_quit is called
+	 * here although NextUI never calls it: one game per process does not need
+	 * to, and this does. */
 	RA_unloadGame();
 	RA_quit();
 	Notification_quit();
-	
 	Game_close();
 	Rewind_free();
 	Core_unload();
 	Core_quit();
-	Core_close();
 	Config_quit();
 	Special_quit();
+	SND_quit();
+	return 0;
+}
+
+static void resident_quit(void)
+{
+	QuitSettings();
+	Core_close();
 	MSG_quit();
 	PWR_quit();
 	VIB_quit();
 	SND_removeDeviceWatcher();
-	// Disabling this is a dumb hack for bluetooth, we should really be using 
-	// bluealsa with --keep-alive=-1 - but SDL wont reconnect the stream on next start.
-	// Reenable as soon as we have a more recent SDL available, if ever.
-	//SND_quit();
 	PAD_quit();
 	GFX_quit();
 	Menu_waitScreenshot();
+}
+
+/* The request the launcher sends per game. Everything that used to arrive as
+ * an environment variable has to come down the pipe instead -- a running
+ * process cannot have its environment changed from outside -- so it is set
+ * with setenv() here and every existing getenv() call site keeps working,
+ * including the viewport lookup over in common/generic_video.c. */
+#define CTR_REQ "/tmp/contrarian_req"
+#define CTR_REP "/tmp/contrarian_rep"
+
+static void ctr_apply_request(char *line, char *rom, size_t rom_n)
+{
+	char *face, *view;
+
+	rom[0] = 0;
+	face = strchr(line, '\t');
+	if (face) *face++ = 0;
+	view = face ? strchr(face, '\t') : NULL;
+	if (view) *view++ = 0;
+
+	snprintf(rom, rom_n, "%s", line);
+	if (face && *face) setenv("CONTRARIAN_FACE", face, 1);
+	else               unsetenv("CONTRARIAN_FACE");
+	if (view && *view) setenv("CONTRARIAN_VIEWPORT", view, 1);
+}
+
+/* A fifo opened for reading alone blocks until a writer appears, and returns
+ * EOF the moment the last writer leaves -- which turns a simple request/reply
+ * into a race that deadlocks whichever side opens first. Holding a write
+ * descriptor of our own removes both behaviours: the read just blocks until a
+ * line arrives, for as long as this process lives. Both ends do the same. */
+static int ctr_fifo_open(const char *path)
+{
+	unlink(path);
+	if (mkfifo(path, 0666) != 0) return -1;
+	return open(path, O_RDWR);
+}
+
+static bool ctr_read_line(int fd, char *out, size_t n)
+{
+	size_t i = 0;
+	char c;
+	while (i + 1 < n) {
+		ssize_t r = read(fd, &c, 1);
+		if (r <= 0) return false;
+		if (c == '\n') break;
+		out[i++] = c;
+	}
+	out[i] = 0;
+	return true;
+}
+
+static int resident_loop(void)
+{
+	char line[MAX_PATH * 3], rom[MAX_PATH];
+	int fd_req, fd_rep;
+
+	fd_req = ctr_fifo_open(CTR_REQ);
+	fd_rep = ctr_fifo_open(CTR_REP);
+	if (fd_req < 0 || fd_rep < 0) {
+		LOG_error("resident: cannot create fifos\n");
+		return EXIT_FAILURE;
+	}
+
+	signal(SIGUSR1, ctr_end_game);
+
+	resident_init();
+	LOG_info("resident: ready in %ims, waiting for a game\n", SDL_GetTicks());
+
+	for (;;) {
+		/* Blocks here between games: no frames, no input, no audio device. */
+		if (!ctr_read_line(fd_req, line, sizeof line)) break;
+		if (!strcmp(line, "exit")) break;
+		if (!line[0]) continue;
+
+		ctr_req_ms = SDL_GetTicks();
+		ctr_apply_request(line, rom, sizeof rom);
+		if (!rom[0]) continue;
+
+		LOG_info("resident: loading %s\n", rom);
+		run_one_game(rom);
+		ctr_req_ms = 0;
+
+		/* Leave the screen black rather than on the game's last frame: the
+		 * launcher plays its own set-switching-off animation next. */
+		GFX_clearAll();
+		GFX_clear(screen);
+		GFX_flip(screen);
+
+		if (write(fd_rep, "done\n", 5) != 5)
+			LOG_error("resident: reply failed\n");
+		LOG_info("resident: idle again, waiting\n");
+	}
+
+	resident_quit();
+	close(fd_req); close(fd_rep);
+	unlink(CTR_REQ); unlink(CTR_REP);
+	return EXIT_SUCCESS;
+}
+
+int main(int argc , char* argv[]) {
+	if (argc < 2)
+		return EXIT_FAILURE;
+
+	PWR_setCPUSpeed(CPU_SPEED_PERFORMANCE); // start in performance mode for fast loading
+	PWR_pinToCores(CPU_CORE_PERFORMANCE); // thread affinity
+
+	/* Resident: minarch.elf --resident <core>. Stays up, one game after
+	 * another, so only the first pays for the GL context and the core. */
+	if (!strcmp(argv[1], "--resident")) {
+		if (argc < 3) return EXIT_FAILURE;
+		snprintf(ctr_core_path, sizeof ctr_core_path, "%s", argv[2]);
+		{
+			/* Core_open honours CONTRARIAN_TAG and ignores this, but there is
+			 * no filename to infer a tag from in resident mode, so give it a
+			 * sane one rather than an empty string. */
+			const char *t = getenv("CONTRARIAN_TAG");
+			snprintf(ctr_tag, sizeof ctr_tag, "%s", (t && *t) ? t : "Contra");
+		}
+		return resident_loop();
+	}
+
+	/* Classic: minarch.elf <core> <rom>, one game per process. Kept because
+	 * it is the launcher's fallback when residency is unavailable. */
+	if (argc < 3) return EXIT_FAILURE;
+	snprintf(ctr_core_path, sizeof ctr_core_path, "%s", argv[1]);
+	getEmuName(argv[2], ctr_tag);
+	LOG_info("rom_path: %s\n", argv[2]);
+
+	resident_init();
+	{
+		char rom[MAX_PATH];
+		snprintf(rom, sizeof rom, "%s", argv[2]);
+		run_one_game(rom);
+	}
+	resident_quit();
 	return EXIT_SUCCESS;
 }
