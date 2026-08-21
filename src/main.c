@@ -410,6 +410,10 @@ static void launch(app *a)
 		snprintf(p, sizeof p, "%s/%s.png", a->faces_dir, it->res.sha1);
 		it->has_face = (stat(p, &st) == 0 && st.st_size > 0);
 	}
+	/* A launch that fell back means there is no resident; start one so the
+	 * next launch is fast again. */
+	if (!resident) plat_spawn_resident(elf, core, env);
+
 	remember_last_played(a, it);
 	if (a->db.dirty) { db_save(a->db_path, &a->db); a->db.dirty = false; }
 

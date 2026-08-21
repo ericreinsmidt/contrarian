@@ -380,7 +380,16 @@ static int run_one_game(char *rom_path)
 	int has_pending_opt_change = 0;
 
 	// then initialize custom  shaders from settings
-	initShaders();
+	/* Contrarian: syncing the shader options loads and links a program for
+	 * every slot regardless of how many are actually in use -- and the slot
+	 * default is index 0, which is a real file, not "none". On a game with the
+	 * CRT off that was ~89ms of a ~370ms launch spent compiling shaders
+	 * nothing would sample. Set the count and skip the sync; applyShaderSettings
+	 * below already loops only over active shaders, so it costs nothing here. */
+	if (config.shaders.options[SH_NROFSHADERS].value == 0)
+		GFX_setShaders(0);
+	else
+		initShaders();
 	Config_readOptions();
 	applyShaderSettings();
 	int rewind_initialized = Rewind_init(core.serialize_size ? core.serialize_size() : 0);

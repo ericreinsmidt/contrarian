@@ -65,6 +65,8 @@ bool plat_run_power_pressed(void);
  * it is not answering, and the caller falls back to running minarch per game. */
 bool plat_resident_ready(void);
 bool plat_resident_send(const char *req_line);
+void plat_spawn_resident(const char *elf, const char *core,
+                         const char *const envkv[]);
 bool plat_resident_wait(void);
 
 /* Drop input that queued while a game owned the screen. */

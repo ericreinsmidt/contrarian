@@ -447,6 +447,37 @@ bool plat_resident_wait(void)
 	return ok;
 }
 
+/* Start a resident minarch, detached, and do not wait for it. launch.sh starts
+ * the first one, but only gets another chance if the launcher itself restarts
+ * -- so a resident that dies mid-session would leave every later launch on the
+ * slow path. Called after a fallback launch, which is exactly when that has
+ * just been proven to have happened. */
+void plat_spawn_resident(const char *elf, const char *core,
+                         const char *const envkv[])
+{
+	pid_t pid;
+
+	if (plat_resident_ready()) return;
+	pid = fork();
+	if (pid != 0) return;              /* parent: never waits on it */
+
+	/* Child. Detach so it does not become a zombie when the launcher is
+	 * blocked elsewhere, and so it outlives this launch. */
+	setsid();
+	if (fork() != 0) _exit(0);
+	{
+		char *argv[4];
+		int i;
+		for (i = 0; envkv && envkv[i]; i++) putenv((char *)envkv[i]);
+		argv[0] = (char *)elf;
+		argv[1] = (char *)"--resident";
+		argv[2] = (char *)core;
+		argv[3] = NULL;
+		execv(elf, argv);
+		_exit(127);
+	}
+}
+
 void plat_request_poweroff(void)
 {
 	FILE *f = fopen(CTR_POWEROFF_FLAG, "w");
